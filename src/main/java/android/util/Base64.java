@@ -1,33 +1,51 @@
 package android.util;
 
+import java.nio.charset.Charset;
+import java.nio.charset.UnsupportedCharsetException;
+
+@SuppressWarnings("WeakerAccess")
 public final class Base64 {
 
-  public Base64() throws IllegalAccessException {
-    throw new IllegalAccessException();
-  }
+  private Base64() {}
 
   public static final int DEFAULT = 0;
   public static final int NO_PADDING = 1;
   public static final int NO_WRAP = 2;
   public static final int CRLF = 4;
   public static final int URL_SAFE = 8;
+  public static final int NO_CLOSE = 16;
 
-  private static abstract class Coder {
+  private static final Charset US_ASCII;
+  static {
+    try {
+      US_ASCII = Charset.forName("US-ASCII");
+    }
+    catch (final UnsupportedCharsetException e) {
+      throw new AssertionError(e);
+    }
+  }
+
+  static abstract class Coder {
 
     public byte[] output;
     public int op;
 
     public abstract boolean process(final byte[] input, final int offset,
                                     final int len, final boolean finish);
+
+    public abstract int maxOutputSize(final int len);
+
   }
 
-  @SuppressWarnings("unused")
+  public static byte[] decode(final String str, final int flags) {
+    return decode(str.getBytes(), flags);
+  }
+
   public static byte[] decode(final byte[] input, final int flags) {
-    return (input == null) ? null : decode(input, 0, input.length, flags);
+    return decode(input, 0, input.length, flags);
   }
 
   public static byte[] decode(final byte[] input, final int offset, final int len, final int flags) {
-    if (input == null) return null;
     final Decoder decoder = new Decoder(flags, new byte[len * 3 / 4]);
     if (!decoder.process(input, offset, len, true)) {
       throw new IllegalArgumentException("bad base-64");
@@ -40,7 +58,7 @@ public final class Base64 {
     return temp;
   }
 
-  private static class Decoder extends Coder {
+  static class Decoder extends Coder {
 
     private static final int DECODE[] = {
       -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
@@ -90,26 +108,28 @@ public final class Base64 {
 
     public Decoder(final int flags, final byte[] output) {
       this.output = output;
-
       alphabet = ((flags & URL_SAFE) == 0) ? DECODE : DECODE_WEBSAFE;
       state = 0;
       value = 0;
     }
 
-    public boolean process(final byte[] input, final int offset, final int length, final boolean finish) {
+    @Override public int maxOutputSize(final int len) {
+      return len * 3/4 + 10;
+    }
+
+    @Override public boolean process(final byte[] input, final int offset, final int length,
+                                     final boolean finish) {
       if (this.state == 6) {
         return false;
       }
       int len = length;
       int p = offset;
       len += offset;
-
       int state = this.state;
       int value = this.value;
       int op = 0;
       final byte[] output = this.output;
       final int[] alphabet = this.alphabet;
-
       while (p < len) {
         if (state == 0) {
           while (p + 4 <= len &&
@@ -127,9 +147,7 @@ public final class Base64 {
             break;
           }
         }
-
         int d = alphabet[input[p++] & 0xff];
-
         switch (state) {
           case 0:
             if (d >= 0) {
@@ -207,14 +225,12 @@ public final class Base64 {
             break;
         }
       }
-
       if (!finish) {
         this.state = state;
         this.value = value;
         this.op = op;
         return true;
       }
-
       switch (state) {
         case 0:
           break;
@@ -234,23 +250,30 @@ public final class Base64 {
         case 5:
           break;
       }
-
       this.state = state;
       this.op = op;
       return true;
     }
+
   }
 
   @SuppressWarnings("unused")
   public static String encodeToString(final byte[] input, final int flags) {
-    return new String(encode(input, 0, input.length, flags));
+    return new String(encode(input, 0, input.length, flags), US_ASCII);
+  }
+
+  public static String encodeToString(final byte[] input, final int offset, final int length,
+                                      final int flags) {
+    return new String(encode(input, offset, length, flags), US_ASCII);
+  }
+
+  public static byte[] encode(final byte[] input, final int flags) {
+    return encode(input, 0, input.length, flags);
   }
 
   public static byte[] encode(final byte[] input, final int offset, final int len, final int flags) {
     final Encoder encoder = new Encoder(flags, null);
-
     int output_len = len / 3 * 4;
-
     if (encoder.do_padding) {
       if (len % 3 > 0) {
         output_len += 4;
@@ -268,19 +291,16 @@ public final class Base64 {
           break;
       }
     }
-
     if (encoder.do_newline && len > 0) {
       output_len += (((len - 1) / (3 * Encoder.LINE_GROUPS)) + 1) *
                     (encoder.do_cr ? 2 : 1);
     }
-
     encoder.output = new byte[output_len];
     encoder.process(input, offset, len, true);
-
     return encoder.output;
   }
 
-  private static class Encoder extends Coder {
+  static class Encoder extends Coder {
 
     public static final int LINE_GROUPS = 19;
 
@@ -299,7 +319,7 @@ public final class Base64 {
       };
 
     private final byte[] tail;
-    private int tailLen;
+    int tailLen;
     private int count;
 
     final public boolean do_padding;
@@ -321,17 +341,20 @@ public final class Base64 {
       count = do_newline ? LINE_GROUPS : -1;
     }
 
-    public boolean process(final byte[] input, final int offset, final int length, final boolean finish) {
+    @Override public int maxOutputSize(final int len) {
+      return len * 8/5 + 10;
+    }
+
+    @Override public boolean process(final byte[] input, final int offset, final int length,
+                                     final boolean finish) {
       final byte[] alphabet = this.alphabet;
       final byte[] output = this.output;
       int op = 0;
       int count = this.count;
-
       int len = length;
       int p = offset;
       len += offset;
       int v = -1;
-
       switch (tailLen) {
         case 0:
           break;
@@ -352,7 +375,6 @@ public final class Base64 {
           }
           break;
       }
-
       if (v != -1) {
         output[op++] = alphabet[(v >> 18) & 0x3f];
         output[op++] = alphabet[(v >> 12) & 0x3f];
@@ -366,7 +388,6 @@ public final class Base64 {
           count = LINE_GROUPS;
         }
       }
-
       while (p + 3 <= len) {
         v = ((input[p] & 0xff) << 16) |
             ((input[p + 1] & 0xff) << 8) |
@@ -385,7 +406,6 @@ public final class Base64 {
           count = LINE_GROUPS;
         }
       }
-
       if (finish) {
         if (p - tailLen == len - 1) {
           int t = 0;
@@ -441,10 +461,8 @@ public final class Base64 {
           tail[tailLen++] = input[p + 1];
         }
       }
-
       this.op = op;
       this.count = count;
-
       return true;
     }
   }
